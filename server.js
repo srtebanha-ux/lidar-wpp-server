@@ -23,6 +23,15 @@ const { connectWhatsApp } = require('./whatsapp');
 
 const app     = express();
 const PORT    = process.env.PORT    || 3000;
+
+// CORS — permite chamadas do Worker e do ERP
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 const API_KEY = process.env.API_KEY || 'lidar-wpp-dev';
 const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
 
