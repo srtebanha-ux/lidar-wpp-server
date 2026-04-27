@@ -111,6 +111,24 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, connected: _connected });
 });
 
+// ── Forçar limpeza de sessão e novo QR (público para emergência) ──
+app.get('/clear-session', (req, res) => {
+  const path = require('path');
+  const fs   = require('fs');
+  const AUTH = path.join(__dirname, 'auth_info');
+  try {
+    fs.rmSync(AUTH, { recursive: true, force: true });
+    fs.mkdirSync(AUTH);
+  } catch {}
+  _connected = false;
+  _currentQR = null;
+  _userInfo  = null;
+  _lastEvent = 'Sessão limpa — aguardando novo QR...';
+  res.json({ ok: true, message: 'Sessão limpa! Aguarde ~5s e acesse / para escanear o novo QR.' });
+  // Reinicia processo para forçar novo QR
+  setTimeout(() => process.exit(0), 1000);
+});
+
 // ── Status JSON ────────────────────────────────────────────
 app.get('/status', (req, res) => {
   res.json({

@@ -71,16 +71,17 @@ async function connectWhatsApp(callbacks = {}) {
       console.log(`[WPP] ❌ Desconectado — código ${code}: ${motivo}`);
       _callbacks.onDisconnected?.(code, motivo);
 
-      // Se foi deslogado (escaneou "sair" no celular) — não reconecta
-      if (code === DisconnectReason.loggedOut) {
-        console.log('[WPP] Sessão encerrada pelo usuário. Apague a pasta auth_info e reinicie para reconectar.');
-        // Limpa a pasta de auth para forçar novo QR
+      // Códigos que exigem limpar a sessão e reconectar do zero
+      const CLEAR_CODES = [DisconnectReason.loggedOut, 515, 401, 403];
+      if (CLEAR_CODES.includes(code)) {
+        console.log(`[WPP] Código ${code} — limpando sessão e gerando novo QR...`);
         try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); fs.mkdirSync(AUTH_DIR); } catch {}
-        if (!_reconnecting) { _reconnecting = true; setTimeout(() => connectWhatsApp(_callbacks), 3000); }
+        _reconnecting = false;
+        setTimeout(() => connectWhatsApp(_callbacks), 3000);
         return;
       }
 
-      // Outros erros: reconecta após delay
+      // Outros erros: reconecta após delay sem limpar sessão
       if (!_reconnecting) {
         _reconnecting = true;
         const delay = (code === 408 || code === 503) ? 10000 : 5000;
