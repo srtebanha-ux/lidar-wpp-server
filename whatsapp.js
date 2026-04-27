@@ -10,6 +10,7 @@ const {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   isJidGroup,
+  Browsers,
 } = require('@whiskeysockets/baileys');
 
 const pino = require('pino');
@@ -38,11 +39,14 @@ async function connectWhatsApp(callbacks = {}) {
       creds: state.creds,
       keys:  makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
     },
-    logger:              pino({ level: 'silent' }),   // sem logs do Baileys no console
+    browser:             Browsers.macOS('Chrome'),   // identifica como Chrome no Mac — ajuda WhatsApp aceitar
+    logger:              pino({ level: 'silent' }),
     printQRInTerminal:   false,
-    markOnlineOnConnect: false,
+    markOnlineOnConnect: true,
     generateHighQualityLinkPreview: false,
     syncFullHistory:     false,
+    connectTimeoutMs:    60000,
+    keepAliveIntervalMs: 25000,
   });
 
   _sock = sock;
