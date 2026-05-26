@@ -70,12 +70,37 @@ npm start
 | `GET` | `/health` | Health check |
 | `GET` | `/status` | Status JSON da conexão |
 | `GET` | `/qr.png` | QR Code como imagem |
+| `GET` | `/logs` | Últimos eventos do servidor (JSON) |
 | `POST` | `/send-text` | Enviar mensagem `{ phone, message }` |
 | `POST` | `/send-bulk` | Envio em lote `{ messages: [{phone, message}] }` |
+| `POST` | `/reconnect` | Forçar reconexão sem limpar sessão |
+| `POST` | `/disconnect` | Desconectar WhatsApp |
+| `POST` | `/set-webhook` | Atualizar webhook em runtime `{ url }` |
 
 Todas as rotas (exceto `/`, `/health`, `/qr.png`) exigem o header:
 ```
 X-Api-Key: sua-chave-aqui
+```
+
+### Remote Control
+
+Exemplos com `curl`:
+
+```bash
+# Forçar reconexão
+curl -X POST https://<url>/reconnect -H "X-Api-Key: <chave>"
+
+# Desconectar
+curl -X POST https://<url>/disconnect -H "X-Api-Key: <chave>"
+
+# Atualizar webhook
+curl -X POST https://<url>/set-webhook \
+  -H "X-Api-Key: <chave>" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://novo-worker.workers.dev/webhook"}'
+
+# Ver logs recentes (últimas 50 entradas)
+curl https://<url>/logs?limit=50 -H "X-Api-Key: <chave>"
 ```
 
 ---
