@@ -5,9 +5,13 @@
  *   GET  /            → Painel de status com QR Code (abrir no navegador)
  *   GET  /status      → JSON com estado da conexão
  *   GET  /qr.png      → QR Code como imagem PNG
+ *   GET  /logs        → Últimos eventos do servidor (JSON)
  *   POST /send-text   → Enviar mensagem { phone, message }
  *   POST /send-bulk   → Enviar para vários { messages: [{phone, message}] }
  *   POST /webhook-test→ Testar o webhook manualmente
+ *   POST /reconnect   → Forçar reconexão sem limpar sessão
+ *   POST /disconnect  → Desconectar WhatsApp
+ *   POST /set-webhook → Atualizar WEBHOOK_URL em tempo de execução { url }
  *
  * Variáveis de ambiente (.env):
  *   PORT          → Porta do servidor (padrão: 3000)
@@ -33,7 +37,7 @@ app.use((req, res, next) => {
   next();
 });
 const API_KEY = process.env.API_KEY || 'lidar-wpp-dev';
-const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
+let WEBHOOK_URL = process.env.WEBHOOK_URL || '';
 
 app.use(express.json());
 
@@ -43,6 +47,14 @@ let _currentQR  = null;   // string do QR atual
 let _connected  = false;
 let _userInfo   = null;
 let _lastEvent  = 'Aguardando conexão...';
+
+// Ring-buffer de logs para o endpoint /logs
+const LOG_BUFFER_SIZE = 100;
+const _logBuffer = [];
+function pushLog(level, msg) {
+  _logBuffer.push({ ts: new Date().toISOString(), level, msg });
+  if (_logBuffer.length > LOG_BUFFER_SIZE) _logBuffer.shift();
+}
 
 // ── Middleware de autenticação ─────────────────────────────
 function auth(req, res, next) {
@@ -59,48 +71,65 @@ function auth(req, res, next) {
 app.use(auth);
 
 // ── Iniciar WhatsApp ───────────────────────────────────────
-connectWhatsApp({
-  onQR: (qr) => {
-    _currentQR = qr;
-    _connected  = false;
-    _lastEvent  = 'QR Code gerado — escaneie com seu WhatsApp';
-    console.log('[Server] QR disponível em http://localhost:' + PORT);
-  },
+function startWhatsApp() {
+  return connectWhatsApp({
+    onQR: (qr) => {
+      _currentQR = qr;
+      _connected  = false;
+      _lastEvent  = 'QR Code gerado — escaneie com seu WhatsApp';
+      const msg = 'QR disponível em http://localhost:' + PORT;
+      console.log('[Server] ' + msg);
+      pushLog('info', msg);
+    },
 
-  onConnected: (user) => {
-    _connected  = true;
-    _currentQR  = null;
-    _userInfo   = user;
-    _lastEvent  = `Conectado como ${user?.id || 'desconhecido'}`;
-    console.log('[Server] ✅ WhatsApp conectado!', user?.id);
-  },
+    onConnected: (user) => {
+      _connected  = true;
+      _currentQR  = null;
+      _userInfo   = user;
+      _lastEvent  = `Conectado como ${user?.id || 'desconhecido'}`;
+      const msg = `WhatsApp conectado: ${user?.id || 'desconhecido'}`;
+      console.log('[Server] ✅ ' + msg);
+      pushLog('info', msg);
+    },
 
-  onDisconnected: (code, motivo) => {
-    _connected  = false;
-    _userInfo   = null;
-    _lastEvent  = `Desconectado (${code}): ${motivo}`;
-    console.log('[Server] ❌ Desconectado:', motivo);
-  },
+    onDisconnected: (code, motivo) => {
+      _connected  = false;
+      _userInfo   = null;
+      _lastEvent  = `Desconectado (${code}): ${motivo}`;
+      const msg = `Desconectado (${code}): ${motivo}`;
+      console.log('[Server] ❌ ' + msg);
+      pushLog('warn', msg);
+    },
 
-  onMessage: async (msg) => {
-    if (!WEBHOOK_URL) return;
-    try {
-      const r = await fetch(WEBHOOK_URL, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(msg),
-      });
-      console.log(`[Server] Webhook → ${WEBHOOK_URL} [${r.status}]`);
-    } catch (e) {
-      console.error('[Server] Erro no webhook:', e.message);
-    }
-  },
-}).then(client => {
-  _wpp = client;
-  console.log('[Server] Cliente WhatsApp iniciado');
-}).catch(e => {
-  console.error('[Server] Erro ao iniciar WhatsApp:', e.message);
-});
+    onMessage: async (msg) => {
+      if (!WEBHOOK_URL) return;
+      try {
+        const r = await fetch(WEBHOOK_URL, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(msg),
+        });
+        const entry = `Webhook → ${WEBHOOK_URL} [${r.status}]`;
+        console.log('[Server] ' + entry);
+        pushLog('info', entry);
+      } catch (e) {
+        console.error('[Server] Erro no webhook:', e.message);
+        pushLog('error', `Webhook error: ${e.message}`);
+      }
+    },
+  }).then(client => {
+    _wpp = client;
+    const msg = 'Cliente WhatsApp iniciado';
+    console.log('[Server] ' + msg);
+    pushLog('info', msg);
+    return client;
+  }).catch(e => {
+    console.error('[Server] Erro ao iniciar WhatsApp:', e.message);
+    pushLog('error', `Erro ao iniciar WhatsApp: ${e.message}`);
+  });
+}
+
+startWhatsApp();
 
 // ════════════════════════════════════════════════════════
 //  ROTAS
@@ -111,7 +140,7 @@ app.get('/health', (req, res) => {
   res.json({ ok: true, connected: _connected });
 });
 
-// ── Forçar limpeza de sessão e novo QR (público para emergência) ──
+// ── Forçar limpeza de sessão e novo QR ────────────────────
 app.get('/clear-session', (req, res) => {
   const path = require('path');
   const fs   = require('fs');
@@ -123,9 +152,10 @@ app.get('/clear-session', (req, res) => {
   _connected = false;
   _currentQR = null;
   _userInfo  = null;
+  _wpp       = null;
   _lastEvent = 'Sessão limpa — aguardando novo QR...';
+  pushLog('info', 'Sessão limpa via /clear-session');
   res.json({ ok: true, message: 'Sessão limpa! Aguarde ~5s e acesse / para escanear o novo QR.' });
-  // Reinicia processo para forçar novo QR
   setTimeout(() => process.exit(0), 1000);
 });
 
@@ -230,6 +260,16 @@ app.get('/', (req, res) => {
     </div>
 
     <button class="refresh" onclick="location.reload()">↻ Atualizar</button>
+
+    <div class="info" style="margin-top:16px;padding-top:16px;border-top:1px solid rgba(255,255,255,.07);text-align:left">
+      <strong style="color:rgba(255,255,255,.7)">Remote Control (requer X-Api-Key)</strong>
+      <ul style="margin-top:8px;list-style:none;display:flex;flex-direction:column;gap:4px">
+        <li>POST <strong>/reconnect</strong> — reconectar sem limpar sessão</li>
+        <li>POST <strong>/disconnect</strong> — desconectar WhatsApp</li>
+        <li>POST <strong>/set-webhook</strong> — atualizar webhook { url }</li>
+        <li>GET &nbsp;<strong>/logs</strong> — últimos eventos do servidor</li>
+      </ul>
+    </div>
   </div>
 </body>
 </html>`);
@@ -278,6 +318,49 @@ app.post('/send-bulk', async (req, res) => {
   }
 
   res.json({ ok: true, results });
+});
+
+// ── Logs do servidor ───────────────────────────────────────
+app.get('/logs', (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 50, LOG_BUFFER_SIZE);
+  res.json({ ok: true, logs: _logBuffer.slice(-limit) });
+});
+
+// ── Forçar reconexão (sem limpar sessão) ───────────────────
+app.post('/reconnect', async (req, res) => {
+  _lastEvent = 'Reconexão forçada via API...';
+  pushLog('info', 'Reconexão forçada via API');
+  res.json({ ok: true, message: 'Reconexão iniciada' });
+  // Fecha socket atual; o handler onDisconnected vai reconectar automaticamente
+  try { _wpp = null; } catch {}
+  setTimeout(() => startWhatsApp(), 500);
+});
+
+// ── Desconectar WhatsApp ────────────────────────────────────
+app.post('/disconnect', async (req, res) => {
+  if (!_connected) {
+    return res.json({ ok: false, message: 'Não estava conectado' });
+  }
+  _lastEvent = 'Desconexão solicitada via API';
+  pushLog('info', 'Desconexão solicitada via API');
+  _connected = false;
+  _userInfo  = null;
+  _wpp       = null;
+  res.json({ ok: true, message: 'WhatsApp desconectado' });
+});
+
+// ── Atualizar webhook em tempo de execução ─────────────────
+app.post('/set-webhook', (req, res) => {
+  const { url } = req.body;
+  if (typeof url !== 'string') {
+    return res.status(400).json({ error: 'Informe url (string).' });
+  }
+  const prev = WEBHOOK_URL;
+  WEBHOOK_URL = url.trim();
+  const msg = `Webhook atualizado: ${prev || '(vazio)'} → ${WEBHOOK_URL || '(vazio)'}`;
+  pushLog('info', msg);
+  console.log('[Server] ' + msg);
+  res.json({ ok: true, webhookUrl: WEBHOOK_URL });
 });
 
 // ── Testar webhook ─────────────────────────────────────────
