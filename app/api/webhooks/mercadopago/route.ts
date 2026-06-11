@@ -64,12 +64,10 @@ export async function POST(req: NextRequest) {
     status: 'approved',
   });
 
-  // Add credits + update plan
+  // Add credits atomically (RPC), then update plan
   const credits = PLAN_CREDITS[plan] ?? 1;
-  await service.from('profiles').update({
-    plan: plan === 'avulso' ? 'avulso' : plan,
-    credits: service.rpc('increment_credits', { uid: userId, amount: credits }),
-  }).eq('id', userId);
+  await service.rpc('increment_credits', { uid: userId, amount: credits });
+  await service.from('profiles').update({ plan }).eq('id', userId);
 
   return NextResponse.json({ ok: true });
 }

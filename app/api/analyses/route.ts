@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
     .eq('id', user.id)
     .single();
 
-  if (!profile || (profile.plan === 'free' && profile.credits <= 0)) {
+  if (!profile || profile.credits <= 0) {
     return NextResponse.json({ error: 'Sem créditos disponíveis. Adquira um plano para continuar.' }, { status: 402 });
   }
 
